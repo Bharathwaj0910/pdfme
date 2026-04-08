@@ -489,9 +489,42 @@ export const changeSchemas = (args: {
   commitSchemas: (newSchemas: SchemaForUI[]) => void;
 }) => {
   const { objs, schemas, basePdf, pluginsRegistry, pageSize, commitSchemas } = args;
+
+  // Identify schemas with programmatic height changes (e.g. table row add).
+  // Manual resize via Moveable sends position changes alongside height, so
+  // we exclude those to avoid unintended sibling shifts during drag-resize.
+  const heightOnlySchemaIds = new Set<string>();
+  for (const { key, schemaId } of objs) {
+    if (key === 'height') heightOnlySchemaIds.add(schemaId);
+  }
+  for (const { key, schemaId } of objs) {
+    if (key === 'position.x' || key === 'position.y') {
+      heightOnlySchemaIds.delete(schemaId);
+    }
+  }
+
   const newSchemas = objs.reduce((acc, { key, value, schemaId }) => {
     const tgt = acc.find((s) => s.id === schemaId);
     if (!tgt) return acc;
+
+    // When a schema's height changes programmatically, push down all sibling
+    // schemas that sit at or below its old bottom edge by the height delta.
+    if (key === 'height' && heightOnlySchemaIds.has(schemaId)) {
+      const oldHeight = tgt.height;
+      const newHeight = Number(value);
+      const heightDelta = newHeight - oldHeight;
+
+      if (heightDelta !== 0) {
+        const oldBottom = tgt.position.y + oldHeight;
+        for (const s of acc) {
+          if (s.id !== schemaId && s.position.y >= oldBottom) {
+            s.position.y = round(s.position.y + heightDelta, 2);
+            handlePositionSizeChange(s, 'position.y', s.position.y, basePdf, pageSize);
+          }
+        }
+      }
+    }
+
     // Assign to reference
     set(tgt, key, value);
 
