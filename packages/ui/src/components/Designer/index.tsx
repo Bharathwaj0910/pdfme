@@ -133,13 +133,70 @@ const TemplateEditor = ({
   const commitSchemas = useCallback(
     (newSchemas: SchemaForUI[]) => {
       future.current = [];
-      past.current.push(cloneDeep(schemasList[pageCursor]));
+      const currentSchemas = schemasList[pageCursor];
+      past.current.push(cloneDeep(currentSchemas));
+
+      // Detect programmatic height changes (height changed but position unchanged)
+      // and push sibling schemas down/up by the height delta.
+      // Manual resize via Moveable always changes position alongside height,
+      // so this only triggers for programmatic changes like table row add/remove.
+      for (const newSchema of newSchemas) {
+        const oldSchema = currentSchemas.find((s) => s.id === newSchema.id);
+        if (!oldSchema) continue;
+
+        const heightDelta = newSchema.height - oldSchema.height;
+        const positionUnchanged =
+          oldSchema.position.x === newSchema.position.x &&
+          oldSchema.position.y === newSchema.position.y;
+
+        if (Math.abs(heightDelta) > 0.001 && positionUnchanged) {
+          const oldBottom = oldSchema.position.y + oldSchema.height;
+          for (const s of newSchemas) {
+            if (s.id !== newSchema.id && s.position.y >= oldBottom) {
+              s.position.y = round(s.position.y + heightDelta, 2);
+            }
+          }
+        }
+      }
+
+      // Separate schemas that overflow past the current page boundary
+      const pageSize = pageSizes[pageCursor];
+      const [, , pb] = isBlankPdf(template.basePdf) ? template.basePdf.padding : [0, 0, 0, 0];
+      const pageBottom = pageSize ? pageSize.height - pb : Infinity;
+
+      const keepOnPage: SchemaForUI[] = [];
+      const overflowToNext: SchemaForUI[] = [];
+      for (const s of newSchemas) {
+        if (s.position.y >= pageBottom) {
+          overflowToNext.push(s);
+        } else {
+          keepOnPage.push(s);
+        }
+      }
+
       const _schemasList = cloneDeep(schemasList);
-      _schemasList[pageCursor] = newSchemas;
+      _schemasList[pageCursor] = keepOnPage;
+
+      if (overflowToNext.length > 0) {
+        // Create next page if it doesn't exist
+        const nextPage = pageCursor + 1;
+        if (nextPage >= _schemasList.length) {
+          _schemasList.push([]);
+        }
+        // Position overflow schemas at the top of the next page
+        const [pt] = isBlankPdf(template.basePdf) ? template.basePdf.padding : [0, 0, 0, 0];
+        let nextY = pt;
+        for (const s of overflowToNext) {
+          s.position.y = nextY;
+          nextY = round(nextY + s.height + 2, 2);
+        }
+        _schemasList[nextPage] = _schemasList[nextPage].concat(overflowToNext);
+      }
+
       setSchemasList(_schemasList);
       onChangeTemplate(schemasList2template(_schemasList, template.basePdf));
     },
-    [template, schemasList, pageCursor, onChangeTemplate],
+    [template, schemasList, pageCursor, pageSizes, onChangeTemplate],
   );
 
   const removeSchemas = useCallback(
